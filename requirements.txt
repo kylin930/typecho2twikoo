@@ -1,0 +1,6 @@
+PyYAML==6.0.3
+markdown-it-py==3.0.0
+bleach==6.2.0
+# Pin transitive dependencies for repeatable installation.
+mdurl==0.1.2
+webencodings==0.5.1
