@@ -21,3 +21,7 @@ report.json
 report.md
 *.cnf
 *.yml.local
+!.env.example
+db-migrations/
+*.backup-receipt.json
+*.migration-journal.json

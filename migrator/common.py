@@ -34,6 +34,8 @@ def write_private(path: Path, content: str) -> None:
     try:
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):

@@ -134,7 +134,7 @@ mongoimport --config "$TOOLS_TEST_CONFIG" --db "$TEST_DB" --collection comment -
 
 ## 到目前为止，真的验证了什么
 
-当前 Linux / Python 3.12 环境下，**49 项自动化测试通过**，覆盖普通评论、多层回复、不同文章、页面、路径设置、转义、审核、异常父链、XSS、重复 ID、错误映射和重复输出一致性。
+第一阶段 Linux / Python 3.12 环境下，**49 项自动化测试通过**，覆盖普通评论、多层回复、不同文章、页面、路径设置、转义、审核、异常父链、XSS、重复 ID、错误映射和重复输出一致性。
 
 另外有两类直接对照：8 组内容身份结果与实际 Nekomi commentKey / Astro 默认规则一致；合成迁移文件交给 Twikoo 2.0.17 的实际导入和回复 DTO 函数，5 个文档完整保留，组装出 3 个主楼、2 条回复。演示输入里有 7 条源评论，waiting 和 spam 各 1 条没有导出。
 
@@ -143,3 +143,46 @@ mongoimport --config "$TOOLS_TEST_CONFIG" --db "$TEST_DB" --collection comment -
 [待补充：真实旧站评论总数、最终导入条数、隔离原因如何处理、测试库导入日志、正式导入结果、页面截图、回滚演练。]
 
 这次最有用的经验是把“已经知道”和“还没发生”写清楚。路径按源码核对，异常留给报告，私密数据留在本地。这样到我真正切换站点时，每一步都有可以检查的输入和输出。
+
+## 第二阶段补记：让文件能安全地进数据库
+
+第一阶段把转换做成了离线工具。接下来我希望同一个入口也能做数据库诊断、备份和分批导入，但默认行为仍然是只读。这里的进展是连接/导入模块和模拟测试完成，还没有我的真实 Atlas 连接结果。
+
+我先让 Codex 检查已有环境，而不是再贴一次密码。结果是没有 MONGODB_URI，没有本地 .env，平台也没有注入 MongoDB 凭据。启动网络快照没有数据库 TCP 授权；对允许的软件包域名做 DNS 基线时，系统解析返回 gaierror(-3)，dnspython 查询得到 resolver_error。这能说明当前执行上下文里这次解析没成功，不能直接说明 Atlas 白名单错了。没有真实 Atlas URI，也就没有一条本次实际复现的 SRV/TLS/认证错误可以贴在文章里。
+
+因此我没有让它换 DNS、猜集群节点或加全网白名单。工具支持两种官方 URI：SRV 让驱动查询 SRV/TXT，标准 URI 直接用 Atlas 提供的节点清单；在本地遇到 SRV 受限时，我会从官方界面取得标准串再配置。不能只改协议名，因为 replicaSet、TLS 和 authSource 都有实际含义。
+
+连接参数放在本地 .env 或安全环境变量里。PyMongo 的池、连接超时、服务器选择超时和 socket 超时各有边界，读操作有限重试，写操作不盲目重试。日志把异常变成认证、权限、DNS、TLS 或网络等类别，不把含连接串的错误原文打出来。
+
+这次还有一个容易忽略的点：ping 成功不一定代表登录成功。所以 db-check 在 ping 后还读当前连接的认证状态。db-info 只看指定库/集合、现有数量、索引和字段类型统计，不下载评论正文到日志，更不靠“哪个库看着像”自动选择生产库。若没写库名，候选 test 会明确标成未确认，不能直接 commit。
+
+接下来我会在自己的电脑上运行：
+
+```sh
+python -m pip install -r requirements-db.txt
+# 先在本地按 .env.example 安全配置，不能把密码发到聊天。
+python migrate.py db-check
+python migrate.py db-info
+python migrate.py db-import --database twikoo_migration_test --dry-run --nekomi ../Nekomi --site https://nekopara.us
+python migrate.py db-backup --database twikoo_migration_test
+```
+
+这些数据库步骤在当前任务里还没有对真实库执行。dry-run 会重新检查文件、映射、父链和数据库 ID 冲突。已有数据走仅追加新 ID 的合并方案，撞 ID 或发现不兼容结构就给出阻断计划，不用 upsert 掩盖差异。
+
+写入的门槛是 --commit、精确确认库/集合、同一目标的有效备份凭据。备份调用官方 mongodump，凭据只放私密临时配置，不带进命令参数；归档完整性和校验值通过后才发备份凭据，失败就不能正式导入。恢复演练还是另一步，不能把 gzip 校验当成“已经恢复成功”。
+
+我最在意的是断线发生在“服务器已经写了，但客户端没收到回复”的时刻。模块会在发送前把 pending IDs 写入本地日志，给新文档加 _migration 批次标签。之后用原文件、原批次 --resume 时，根据数据库中实际存在的文档和完整 BSON 比对来决定哪些已成功、哪些还没写，而不是把整批再发一次。已经被管理员改过或确认后被删除的记录不会自动重建。
+
+测试里专门模拟了只写入一条后断线、整批已写但响应丢失、后续编辑、外来重复 ID 和恢复输入变化。第二阶段完成后，完整套件是 **96 项测试通过**，其中 47 项是新增数据库模拟测试。带批次字段的 5 条合成数据也通过了官方 Twikoo 2.0.17 导入/回复函数核对。这些都没有把 Twikoo 服务真正跑起来。
+
+本地后续命令会包含以下显式写入步骤；备份凭据和批次 ID 要用实际输出，不能照抄占位符：
+
+```sh
+python migrate.py db-import --database twikoo_migration_test --commit --confirm-database twikoo_migration_test --confirm-collection comment --backup-receipt backups/实际备份凭据.backup-receipt.json --nekomi ../Nekomi --site https://nekopara.us
+python migrate.py db-verify --database twikoo_migration_test --batch-id 实际批次ID --nekomi ../Nekomi --site https://nekopara.us
+python migrate.py db-rollback-plan --database twikoo_migration_test --batch-id 实际批次ID
+```
+
+这里没有自动删除功能。回滚计划只标出日志与数据库标签的对应关系，仍要看后续新评论和外部回复；必要时把备份先恢复到新库。分批写入不是整个文件的事务，维护窗口和恢复步骤仍然有用。
+
+[待补充：真实本地 db-check 输出的脱敏摘要、最终使用 SRV 还是标准 URI、备份恢复演练、测试库写入结果、Twikoo 2.0.17 测试服务端与浏览器逐项验收、正式写入授权与最终数量。当前没有这些结果，不能写成已经迁移成功。]

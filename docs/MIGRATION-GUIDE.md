@@ -1,6 +1,6 @@
 # Typecho → Nekomi / Twikoo 完整离线迁移教程
 
-本教程只在本地读备份、生成文件。真实数据库导入由你在自己的电脑上执行；不要把数据库连接串放入主题或本仓库。目标存储契约是 Twikoo **2.0.17 MongoDB**，源码依据见 [RESEARCH.md](RESEARCH.md)。
+离线步骤只读备份、生成文件。第二阶段提供可选 Python 数据库连接和导入命令，真实写入仍由你在自己的电脑上明确启用；不要把数据库连接串放入主题或本仓库。目标存储契约是 Twikoo **2.0.17 MongoDB**，源码依据见 [RESEARCH.md](RESEARCH.md)。
 
 ## 1. 准备与安装
 
@@ -192,3 +192,24 @@ Nekomi 的公开配置只写服务地址，不写数据库连接串：
 保留源 SQL、人工确认的 CSV、namespace、输出 JSONL 和 Mongo 备份的私密副本。正式切换前暂停评论写入并做最终备份；不要在未区分新旧数据时直接整库覆盖恢复。推荐把备份还原到新的恢复库，再让测试后端验证，最后切换配置，详见导入指南。
 
 完成后补记实际迁移数量、服务端版本、浏览器截图和导入结果到你自己的记录。仓库的执行报告只记录合成测试，不能把测试数量当成真实评论总数。
+
+## 8. 第二阶段：可选 Python 自动迁移
+
+安装 `python -m pip install -r requirements-db.txt`，将 `.env.example` 复制为本地 `.env`，填写真实部署的 URI、数据库名、集合名。详见 [MongoDB 连接与自动迁移](MONGODB-CONNECTION.md)。原来的 mongoimport 手动路径继续可用，两条路径选择一条，不能把同一文件重复导入。
+
+推荐顺序：`db-check` → `db-info` → 测试库 dry-run → `db-backup` → 带精确目标确认的测试库 commit → `db-verify` → 相同版本 Twikoo 测试服务和浏览器验收 → 再对生产库执行独立的预检、备份和明确授权。
+
+```sh
+python migrate.py db-check
+python migrate.py db-info
+python migrate.py db-import --database twikoo_migration_test --dry-run --nekomi ../Nekomi --site https://nekopara.us
+python migrate.py db-backup --database twikoo_migration_test
+# 下面命令会写测试库；先将备份凭据替换为上一步实际返回的路径。
+python migrate.py db-import --database twikoo_migration_test --commit --confirm-database twikoo_migration_test --confirm-collection comment --backup-receipt backups/实际生成的.backup-receipt.json --nekomi ../Nekomi --site https://nekopara.us
+```
+
+数据库命令复用 `--file`、`--map` 和 Nekomi 扫描来重验路径；支持同样的 base/配置/外部内容目录参数。已有 ID 不会被覆盖。任何结构改造都只产生需人工审查的计划。
+
+若写入中断，保留原 JSONL、namespace、CSV 和 `output/db-migrations/`，用 `--resume 批次ID` 加在同一写入命令后。不要创建新 namespace 或改输入文件来掩盖部分写入。默认备份凭据须在 24 小时内；恢复超过时限应对当前库另做备份，并保留最初迁移前备份。
+
+完成提示为 `storage_verified`，仅表示输入对应的存储文档核对通过，不代表 Twikoo UI 验收完成。真实端到端验证步骤和恢复审查见连接指南。

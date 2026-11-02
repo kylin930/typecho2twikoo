@@ -15,7 +15,7 @@ from .validate import load_documents, validate, check_existing_ids
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description='Typecho → Twikoo 2.0.17 离线迁移（不连接数据库）')
+    p = argparse.ArgumentParser(description='Typecho → Twikoo 2.0.17：离线转换与显式启用的 MongoDB 迁移')
     commands = p.add_subparsers(dest='command', required=True)
     for command in ['inspect', 'prepare', 'convert']:
         sub = commands.add_parser(command)
@@ -40,10 +40,18 @@ def parser() -> argparse.ArgumentParser:
     sub = commands.add_parser('validate')
     sub.add_argument('--file', required=True, type=Path)
     sub.add_argument('--existing-ids', type=Path, help='mongoexport 导出的目标集合 _id 快照，仅离线检测冲突')
+    from .db_args import register
+    register(commands)
     return p
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.command.startswith('db-'):
+        try:
+            from migration.cli import run as run_database
+        except ModuleNotFoundError:
+            raise MigrationError('数据库命令需要可选依赖：python -m pip install -r requirements-db.txt') from None
+        return run_database(args)
     if args.command == 'validate':
         docs = load_documents(args.file)
         result = validate(docs)
